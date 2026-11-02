@@ -1,0 +1,188 @@
+# =============================================================================
+# Bearing Fault Diagnosis - Default Experiment Configuration
+# =============================================================================
+
+project:
+  name: "Bearing Fault Diagnosis Framework"
+  version: "1.0.0"
+  description: "EWT + Self-Attention CNN + Hierarchical Transfer Learning"
+
+# ---------------------------------------------------------------------------
+# Reproducibility
+# ---------------------------------------------------------------------------
+seed: 42
+
+# ---------------------------------------------------------------------------
+# Data paths
+# ---------------------------------------------------------------------------
+data:
+  base_dir: "data"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  manifests_dir: "data/manifests"
+
+  cwru:
+    root: "data/raw/CWRU"
+    sampling_rate: 12000        # Hz (drive-end sensor at 12 kHz or 48 kHz)
+    drive_end_key: "DE_time"
+    fan_end_key: "FE_time"
+    fault_categories:
+      - "normal"
+      - "inner_race"
+      - "outer_race"
+      - "ball"
+
+  paderborn:
+    root: "data/raw/Paderborn"
+    sampling_rate: 64000        # Hz
+    channels:
+      - "vibration"
+    operating_conditions:
+      - { speed_rpm: 1500, torque_Nm: 0.7, radial_load_N: 1000, label: "N09_M07_F10" }
+      - { speed_rpm: 900,  torque_Nm: 0.7, radial_load_N: 1000, label: "N15_M01_F10" }
+      - { speed_rpm: 1500, torque_Nm: 0.1, radial_load_N: 1000, label: "N15_M07_F04" }
+
+  xjtu:
+    root: "data/raw/XJTU-SY"
+    sampling_rate: 25600        # Hz
+    enabled: false              # Optional dataset; enable when data is available
+
+# ---------------------------------------------------------------------------
+# Preprocessing
+# ---------------------------------------------------------------------------
+preprocessing:
+  window_length: 2048
+  overlap: 0.5                  # fraction overlap between consecutive windows
+  normalization: "zscore"       # options: zscore | minmax | none
+  min_windows_per_class: 10    # reject classes with fewer windows
+  test_split: 0.20
+  val_split:  0.15
+  split_by: "recording"         # split on whole recordings to prevent leakage
+
+# ---------------------------------------------------------------------------
+# EWT parameters
+# ---------------------------------------------------------------------------
+ewt:
+  n_components: 3               # number of empirical wavelet components
+  method: "adaptive"            # adaptive boundary detection
+  threshold_type: "adaptive"    # boundary detection threshold
+  smooth_boundaries: true
+
+# ---------------------------------------------------------------------------
+# Model architectures
+# ---------------------------------------------------------------------------
+models:
+
+  baseline_cnn:
+    in_channels: 1
+    num_classes: 4
+    conv_channels: [32, 64, 128]
+    kernel_sizes: [7, 5, 3]
+    dropout: 0.3
+    fc_units: [256, 128]
+    activation: "relu"
+
+  attention_cnn:
+    in_channels: 1
+    num_classes: 4
+    conv_channels: [32, 64, 128]
+    kernel_sizes: [7, 5, 3]
+    attention_heads: 4
+    attention_dropout: 0.1
+    dropout: 0.3
+    fc_units: [256, 128]
+    activation: "relu"
+
+  ewt_attention_cnn:
+    in_channels: 3              # equals n_components from EWT
+    num_classes: 4
+    conv_channels: [32, 64, 128]
+    kernel_sizes: [7, 5, 3]
+    attention_heads: 4
+    attention_dropout: 0.1
+    dropout: 0.3
+    fc_units: [256, 128]
+    activation: "relu"
+
+  transfer:
+    feature_extractor: "attention_cnn"
+    freeze_backbone_epochs: 5   # epochs with frozen backbone before fine-tuning
+    domain_adaptation: "domain_invariant"   # options: finetune | domain_invariant
+    adaptation_weight: 0.3      # weight for domain adaptation loss
+    hierarchical_levels: 2      # level 1: fault type; level 2: fault severity
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  epochs: 30
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 1.0e-4
+  optimizer: "adam"             # options: adam | sgd | adamw
+  scheduler: "cosine"           # options: cosine | step | none
+  scheduler_T_max: 30
+  lr_step_size: 10              # StepLR: decay every N epochs (used when scheduler=step)
+  lr_step_gamma: 0.5            # StepLR: multiplicative decay factor
+  grad_clip_norm: 5.0           # gradient-clip max norm (0 = disabled)
+  loss: "cross_entropy"         # options: cross_entropy | weighted_cross_entropy
+  class_weighted_loss: true
+  early_stopping_patience: 10
+  checkpoint_dir: "artifacts/checkpoints"
+  save_best_only: true
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+evaluation:
+  metrics:
+    - "accuracy"
+    - "macro_precision"
+    - "macro_recall"
+    - "macro_f1"
+    - "per_class_f1"
+  confusion_matrix: true
+  export_dir: "artifacts/results"
+
+# ---------------------------------------------------------------------------
+# Experiment definitions
+# ---------------------------------------------------------------------------
+experiments:
+  A:
+    name: "Baseline 1D CNN (raw)"
+    model: "baseline_cnn"
+    preprocessing: "raw"
+    dataset: "cwru"
+  B:
+    name: "EWT + CNN"
+    model: "baseline_cnn"
+    preprocessing: "ewt"
+    dataset: "cwru"
+  C:
+    name: "Self-Attention CNN (raw)"
+    model: "attention_cnn"
+    preprocessing: "raw"
+    dataset: "cwru"
+  D:
+    name: "EWT + Self-Attention CNN"
+    model: "attention_cnn"
+    preprocessing: "ewt"
+    dataset: "cwru"
+  E:
+    name: "Transfer Learning (no EWT)"
+    model: "transfer"
+    preprocessing: "raw"
+    dataset: "paderborn"
+  F:
+    name: "Hybrid (EWT + Attention + Transfer)"
+    model: "transfer"
+    preprocessing: "ewt"
+    dataset: "paderborn"
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  log_dir: "artifacts/logs"
+  tensorboard: false
